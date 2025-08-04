@@ -1,16 +1,18 @@
 rm(list = ls())
 
-# libraries
-library(RTMB)
-library(dplyr)
-library(tidyr)
-library(ggplot2)
+# remotes::install_github("kaskr/TMB_contrib_R/TMBhelper")
+# remotes::install_github("Cole-Monnahan-NOAA/adnuts", ref = "sparse_M")
 
-# read catch data
-load("raw_data/CRA2/catch_CRA2.rda")
-head(catch_CRA2)
-# calculate total catch 
-catch_CRA2
+library(tidyverse)
+library(decamod)
+library(RTMB)
+library(TMBhelper)
+
+theme_set(theme_bw())
+
+# Read catch data ----
+
+load("data/CRA2/catch_CRA2.rda")
 
 catch <- catch_CRA2 %>%
   mutate(TotalCatch = Commercial + Recreational) %>%
@@ -25,23 +27,17 @@ ggplot(catch, aes(x = Year, y = Catch)) +
   theme_minimal() +
   scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) 
 
+# Read in CPUE data ----
 
-# read logbook CPUE index 
-load("raw_data/CRA2/logbook_CRA2.rda")
-head(logbook_CRA2)
+load("data/CRA2/logbook_CRA2.rda")
 
-# Extract mean CPUE and SD by year 
 CPUE_logbook <- logbook_CRA2 %>%
   separate(Year, into = c("Year", "Season"), sep = "_") %>%
   mutate(Year = as.integer(Year)) %>%
   group_by(Year) %>%
-  summarise(
-    CPUE = mean(Mean, na.rm = TRUE),
-    SD = mean(SD, na.rm = TRUE)
-  ) %>%
-  ungroup()
-head(CPUE_logbook)
-tail(CPUE_logbook)
+  summarise(CPUE = mean(Mean, na.rm = TRUE), SD = mean(SD, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(q = 3)
 
 ggplot(CPUE_logbook, aes(x = Year, y = CPUE)) +
   geom_line(color = "red", linewidth = 2) +
@@ -50,205 +46,158 @@ ggplot(CPUE_logbook, aes(x = Year, y = CPUE)) +
   theme_minimal() +
   scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) 
 
+load("data/CRA2/fsu_CRA2.rda")
 
-# read FSU CPUE index 
-load("raw_data/CRA2/fsu_CRA2.rda")
-head(fsu_CRA2)
-
-# Extract mean CPUE and SD by year 
 CPUE_fsu <- fsu_CRA2 %>%
   mutate(Year = as.integer(year)) %>%
   group_by(Year) %>%
-  summarise(
-    CPUE = mean(Mean, na.rm = TRUE),
-    SD = mean(SD, na.rm = TRUE)
-  ) %>%
-  ungroup()
-head(CPUE_fsu)
-tail(CPUE_fsu)
+  summarise(CPUE = mean(Mean, na.rm = TRUE), SD = mean(SD, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(q = 1)
 
-# read CELR CPUE index 
-load("raw_data/CRA2/celr_CRA2.rda")
-head(celr_CRA2)
+load("data/CRA2/celr_CRA2.rda")
 
-# Extract mean CPUE and SD by year 
 CPUE_celr <- celr_CRA2 %>%
   separate(Year, into = c("Year", "Season"), sep = "_") %>%
   mutate(Year = as.integer(Year)) %>%
   group_by(Year) %>%
-  summarise(
-    CPUE = mean(Mean, na.rm = TRUE),
-    SD = mean(SD, na.rm = TRUE)
-  ) %>%
-  ungroup()
-head(CPUE_celr)
-tail(CPUE_celr)
+  summarise(CPUE = mean(Mean, na.rm = TRUE), SD = mean(SD, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(q = 2)
 
-# state-space Surplus Production model for rock lobster 
+CPUE <- bind_rows(CPUE_fsu, CPUE_celr, CPUE_logbook)
+l_cpue <- c("FSU", "CELR", "Logbook")
 
-## Initial guess on parameters for a Pella-Tomlinson model
-K <- 1500       # Carrying capacity
-r <- 0.35     # Growth rate
-q <- 0.001     # catchability 
-z <- 1   # With z=1, the PT model is the Shaeffer model
-sigma_p <- 0.1 # process error 
+# State-space Surplus Production model for rock lobster 
 
-N_catch <- length(catch$Year)
-B <- numeric(N_catch)
+n_year <- length(catch$Year)
 
-N_cpue <- length(CPUE_logbook$Year)
-cpue_pred <- numeric(N_cpue)
-
-## TMB Data
 data <- list(
   year = catch$Year,
   catch_obs = catch$Catch,
-  
-  cpue_log_obs = CPUE_logbook$CPUE,
-  cpue_log_year = CPUE_logbook$Year,
-  cpue_log_sd = CPUE_logbook$SD,
-  
-  cpue_fsu_obs = CPUE_fsu$CPUE,
-  cpue_fsu_year = CPUE_fsu$Year,
-  cpue_fsu_sd = CPUE_fsu$SD,
-  
-  cpue_celr_obs = CPUE_celr$CPUE,
-  cpue_celr_year = CPUE_celr$Year,
-  cpue_celr_sd = CPUE_celr$SD
+  cpue_year = CPUE$Year,
+  cpue_q = CPUE$q,
+  cpue_obs = CPUE$CPUE,
+  cpue_sd = CPUE$SD
 )
 
-## Initial guess on parameters for the fitted Ricker model
-parameters0 <- list(
-  logB = log(rep(K, N_catch) + 1e-6),
-  logr = log(r),
-  logK = log(K),
-  logq_log = log(q),
-  logq_fsu = log(q),
-  logq_celr = log(q),
-  logsigma_p = log(sigma_p),
-  logz = log(1)
+parameters <- list(
+  log_r = log(0.35), # Growth rate
+  log_K = log(1500), # Carrying capacity
+  log_z = log(1), # With z=1, the PT model is the Shaeffer model
+  log_q = log(rep(0.001, 3)), # catchability
+  log_cpue_pro = log(rep(1e-6, 3)), # process error for CPUE
+  log_sigmap = log(0.1), # process error
+  log_B = log(rep(1500, n_year - 1))
 )
 
-## Make TMB model 
-fixed <- factor(NA)
+priors <- list()
+# priors[["log_r"]] <- list(type = "normal", par1 = 10, par2 = 1.5, index = which("log_r" == names(parameters)))
+# priors[["log_K"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_K" == names(parameters)))
+priors[["log_z"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_z" == names(parameters)))
+# priors[["log_q"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_q" == names(parameters)))
+# priors[["log_cpue_pro"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_cpue_pro" == names(parameters)))
+# priors[["log_sigmap"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_sigmap" == names(parameters)))
+priors
+evaluate_priors(parameters, priors)
+data$priors <- priors
 
-fun <- function(parms) {
-  getAll(data, parms, warn = FALSE)
+fun <- function(parameters, data) {
+  getAll(parameters, data, warn = FALSE)
   
-  # Mark CPUEs for OSA
-  cpue_log_obs <- OBS(cpue_log_obs)
-  cpue_fsu_obs <- OBS(cpue_fsu_obs)
-  cpue_celr_obs <- OBS(cpue_celr_obs)
+  r <- exp(log_r)
+  K <- exp(log_K)
+  z <- exp(log_z)
+  q <- exp(log_q)
+  B <- c(K, exp(log_B))
+  # B <- exp(log_B)
   
-  r <- exp(parms$logr)
-  K <- exp(parms$logK)
-  q_log <- exp(parms$logq_log)
-  q_fsu <- exp(parms$logq_fsu)
-  q_celr <- exp(parms$logq_celr)
-  sigma_p <- exp(parms$logsigma_p)
-  z <- exp(parms$logz)
-  logB <- parms$logB
-  B <- exp(logB)
+  n_year <- length(data$year)
   
-  N <- length(data$year)
-  logB_pred <- numeric(N)
-  Prod <- numeric(N)
+  # Prod <- numeric(n_year)
+  # Prod[1] <- r / z * log_Bpred[1] * (1 - (log_Bpred[1] / K)^z)
+  Prod <- r / z * B * (1 - (B / K)^z)
   
-  logB_pred[1] <- log(K)
-  Prod[1] <- r / z * logB_pred[1] * (1.0 - (logB_pred[1] / K)^z)
-  
-  for (y in 2:N) {
-    B_prev <- B[y - 1]
-    Prod[y - 1] <- r / z * B_prev * (1 - (B_prev / K)^z)
-    B_t <- B_prev + Prod[y - 1] - data$catch_obs[y - 1] + 1e-6
-    logB_pred[y] <- log(B_t)
+  Bpred <- numeric(n_year)
+  Bpred[1] <- K
+
+  for (y in 2:n_year) {
+    # B_prev <- B[y - 1]
+    # Prod[y - 1] <- r / z * B[y - 1] * (1 - (B[y - 1] / K)^z)
+    # B_t <- B[y - 1] + Prod[y - 1] - catch_obs[y - 1]# + 1e-6
+    # B_t <- B[y - 1] + Prod[y - 1] - catch_obs[y - 1]# + 1e-6
+    # Bpred[y] <- log(B_t)
+    Bpred[y] <- B[y - 1] + Prod[y - 1] - catch_obs[y - 1]
   }
+
+  nll_B <- -sum(dnorm(log(B), mean = log(Bpred), sd = exp(log_sigmap), log = TRUE))
+  REPORT(Bpred)
   
-  nll_B <- -sum(dnorm(logB, mean = logB_pred, sd = sigma_p, log = TRUE))
+  cpue_obs <- OBS(cpue_obs)
+  cpue_pred <- q[cpue_q] * B[match(cpue_year, year)]
+  cpue_sigma <- sqrt(cpue_sd^2 + exp(log_cpue_pro[cpue_q])^2)# / cpue_wt
+  nll_cpue <- -1 * dlnorm(x = cpue_obs, meanlog = log(cpue_pred), sdlog = cpue_sigma, log = TRUE)
+  REPORT(cpue_pred)
   
-  # Prediction and NLL for each index
-  cpue_pred_log <- q_log * B[match(data$cpue_log_year, data$year)]
-  cpue_pred_fsu <- q_fsu * B[match(data$cpue_fsu_year, data$year)]
-  cpue_pred_celr <- q_celr * B[match(data$cpue_celr_year, data$year)]
-  
-  nll_log <- -sum(dnorm(cpue_log_obs, mean = cpue_pred_log,
-                        sd = data$cpue_log_sd, log = TRUE))
-  nll_fsu <- -sum(dnorm(cpue_fsu_obs, mean = cpue_pred_fsu,
-                        sd = data$cpue_fsu_sd, log = TRUE))
-  nll_celr <- -sum(dnorm(cpue_celr_obs, mean = cpue_pred_celr,
-                         sd = data$cpue_celr_sd, log = TRUE))
-  
-  nll <- nll_B + nll_log + nll_fsu + nll_celr
+  nll <- nll_B + sum(nll_cpue) + evaluate_priors(parameters, priors)
   return(nll)
 }
 
+# Fit the model ----
 
-obj <- MakeADFun(fun,  # Function taking a parameter list (or parameter vector) as input.
-                 parameters0, # Parameter list (or parameter vector) used by fun
-                 random="logB", # Character vector defining the random effect parameters.
-                 map=list(logz=fixed))  # List defining how to optionally collect and fix parameters
+map <- list(log_z = factor(NA), log_cpue_pro = factor(c(NA, NA, NA)))
+# map <- list(log_cpue_pro = factor(c(NA, NA, NA)))
 
-## Fit the model 
-system.time(opt <- nlminb(obj$par,obj$fn,obj$gr))    
+obj <- MakeADFun(cmb(fun, data), parameters, random = "log_B", map = map)
+
+Lwr <- rep(-Inf, length(obj$par))
+Upr <- rep(Inf, length(obj$par))
+Lwr[grep("log_r", names(obj$par))] <- -10
+Upr[grep("log_r", names(obj$par))] <- 10
+Lwr[grep("log_K", names(obj$par))] <- log(100)
+Upr[grep("log_K", names(obj$par))] <- log(10000)
+Lwr[grep("log_z", names(obj$par))] <- log(0)
+Upr[grep("log_z", names(obj$par))] <- log(2)
+Lwr[grep("log_q", names(obj$par))] <- -25
+Upr[grep("log_q", names(obj$par))] <- 1
+Lwr[grep("log_sigmap", names(obj$par))] <- log(0)
+Upr[grep("log_sigmap", names(obj$par))] <- log(2)
+Lwr[grep("log_cpue_pro", names(obj$par))] <- log(0)
+Upr[grep("log_cpue_pro", names(obj$par))] <- log(2)
+
+control <- list(eval.max = 100000, iter.max = 100000)
+opt <- nlminb(start = obj$par, objective = obj$fn, gradient = obj$gr, control = control, lower = Lwr, upper = Upr)
+opt <- nlminb(start = opt$par, objective = obj$fn, gradient = obj$gr, control = control, lower = Lwr, upper = Upr)
+check_estimability(obj = obj)
+
 sd <- sdreport(obj)
-
-# Recursive quantile residuals: For this to work, you need to mark the observation inside the objective function using
-# the OBS function. Thereafter, residual calculation is as simple as oneStepPredict(obj). 
-# However, you probably want specify a method to use.
-
-pred  <- oneStepPredict(obj,
-                        method="oneStepGeneric",discrete=TRUE,range=c(0,Inf),
-                        conditional=1, ## Skip first residual
-                        parallel=FALSE)
-# CHEKC: Warning message: In qnorm(pred$Fx - U * pred$px) : NaNs produced
-pred$residual # there NaNs here 
 pred_pars <- exp(opt$par)
 names(obj$env)
 
-pred_B <- data.frame(Year=data$year, B = exp(obj$env$last.par.best[names(obj$env$last.par.best) == "logB"]))
+# Plot biomass ----
+
+pred_B <- data.frame(Year = data$year, B = obj$report()$Bpred)
 
 ggplot(pred_B, aes(x = Year, y = B)) +
   geom_point(color = "blue", size = 3) +
   geom_line(color = "blue", size = 1) + 
-  labs(x = "Year", y = "B") +
-  theme_minimal() +
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 2500)) 
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 2500)) +
+  labs(x = "Fishing year", y = "Biomass")
 
-# Predicted CPUE values
-cpue_pred_log <- exp(opt$par["logq_log"]) * pred_B$B[match(CPUE_logbook$Year, pred_B$Year)]
-cpue_pred_fsu <- exp(opt$par["logq_fsu"]) * pred_B$B[match(CPUE_fsu$Year, pred_B$Year)]
-cpue_pred_celr <- exp(opt$par["logq_celr"]) * pred_B$B[match(CPUE_celr$Year, pred_B$Year)]
+# Plot Observed vs Predicted CPUE ----
 
-# Combine into a long data frame
-cpue_df <- bind_rows(
-  tibble(Year = CPUE_logbook$Year, Observed = CPUE_logbook$CPUE,
-         Predicted = cpue_pred_log, Index = "Logbook"),
-  tibble(Year = CPUE_fsu$Year, Observed = CPUE_fsu$CPUE,
-         Predicted = cpue_pred_fsu, Index = "FSU"),
-  tibble(Year = CPUE_celr$Year, Observed = CPUE_celr$CPUE,
-         Predicted = cpue_pred_celr, Index = "CELR")
-)
-
-# Plot Observed vs Predicted
-cpue_df$Index <- factor(cpue_df$Index, levels = c("CELR", "FSU", "Logbook"))
+cpue_df <- data.frame(Year = CPUE$Year, Observed = CPUE$CPUE, Predicted = obj$report()$cpue_pred, Index = l_cpue[CPUE$q]) %>% 
+  mutate(Index = factor(Index, levels = l_cpue))
 
 ggplot(cpue_df, aes(x = Year)) +
   geom_point(aes(y = Observed), color = "grey", size = 2) +
   geom_line(aes(y = Predicted), color = "red", linewidth = 1.2) +
-  facet_wrap(~Index, ncol = 1) +  # 3 rows
-  labs(y = "CPUE") +
-  theme_minimal()
+  facet_grid(Index ~ ., scales = "free_y") +
+  labs(x = "Fishing year", y = "CPUE")
 
-resid_fsu <- oneStepPredict(obj = obj, observation.name = "cpue_fsu_obs", method = "oneStepGeneric", trace = FALSE)$residual
-resid_celr <- oneStepPredict(obj = obj, observation.name = "cpue_celr_obs", method = "oneStepGeneric", trace = FALSE)$residual
-resid_log <- oneStepPredict(obj = obj, observation.name = "cpue_log_obs", method = "oneStepGeneric", trace = FALSE)$residual
-
-df_fsu <- data.frame(Year = data$cpue_fsu_year, Residual = resid_fsu, Index = "FSU")
-df_celr <- data.frame(Year = data$cpue_celr_year, Residual = resid_celr, Index = "CELR")
-df_log  <- data.frame(Year = data$cpue_log_year, Residual = resid_log, Index = "LB")
-
-resid_df <- bind_rows(df_fsu, df_celr, df_log)
-resid_df$Index <- factor(resid_df$Index, levels = c("CELR", "FSU", "LB"))
+resid <- oneStepPredict(obj = obj, observation.name = "cpue_obs", method = "oneStepGeneric", trace = FALSE)$residual
+resid_df <- data.frame(Year = data$cpue_year, Residual = resid, Index = l_cpue[CPUE$q]) %>% 
+  mutate(Index = factor(Index, levels = l_cpue))
 
 ggplot(resid_df, aes(x = Year, y = Residual)) +
   geom_hline(yintercept = 0, color = "#00BA38", linetype = "dashed", linewidth = 0.5) +
@@ -256,5 +205,16 @@ ggplot(resid_df, aes(x = Year, y = Residual)) +
   geom_linerange(aes(ymin = 0, ymax = Residual), color = "#619CFF", linewidth = 0.8) +
   geom_point(color = "#619CFF", size = 2) +
   facet_wrap(~ Index, ncol = 1) +
-  theme_minimal(base_size = 14) +
-  labs(y = "OSA Residuals", x = "Year")
+  labs(x = "Fishing year", y = "OSA residuals")
+
+# MCMC ----
+
+library(adnuts)
+
+mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", iter = 4000, warmup = 3000, chains = 4, cores = 4,
+                          control = list(adapt_delta = 0.995), init = "last.par.best")
+
+pairs_rtmb(fit = mcmc, pars = 1:5, order = "slow")
+pairs_rtmb(fit = mcmc, pars = 1:5, order = "mismatch")
+pairs_rtmb(fit = mcmc, pars = 1:5, order = "divergent")
+plot_marginals(fit = mcmc, pars = 1:16)
