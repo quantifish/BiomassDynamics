@@ -93,9 +93,9 @@ parameters <- list(
 
 priors <- list()
 # priors[["log_r"]] <- list(type = "normal", par1 = 10, par2 = 1.5, index = which("log_r" == names(parameters)))
-# priors[["log_K"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_K" == names(parameters)))
+priors[["log_K"]] <- list(type = "normal", par1 = log(1000), par2 = 10, index = which("log_K" == names(parameters)))
 priors[["log_z"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_z" == names(parameters)))
-# priors[["log_q"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_q" == names(parameters)))
+priors[["log_q"]] <- list(type = "normal", par1 = -5, par2 = 2, index = which("log_q" == names(parameters)))
 # priors[["log_cpue_pro"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_cpue_pro" == names(parameters)))
 # priors[["log_sigmap"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_sigmap" == names(parameters)))
 priors
@@ -139,7 +139,7 @@ fun <- function(parameters, data) {
   nll_cpue <- -1 * dlnorm(x = cpue_obs, meanlog = log(cpue_pred), sdlog = cpue_sigma, log = TRUE)
   REPORT(cpue_pred)
   
-  nll <- nll_B + sum(nll_cpue) + evaluate_priors(parameters, priors)
+  nll <- nll_B + sum(nll_cpue) - evaluate_priors(parameters, priors)
   return(nll)
 }
 
@@ -211,10 +211,11 @@ ggplot(resid_df, aes(x = Year, y = Residual)) +
 
 library(adnuts)
 
-mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", iter = 4000, warmup = 3000, chains = 4, cores = 4,
-                          control = list(adapt_delta = 0.995), init = "last.par.best")
+# mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", iter = 4000, warmup = 3000, chains = 4, cores = 4,
+#                           control = list(adapt_delta = 0.995), init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
+mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", chains = 4, cores = 4, init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
 
 pairs_rtmb(fit = mcmc, pars = 1:5, order = "slow")
 pairs_rtmb(fit = mcmc, pars = 1:5, order = "mismatch")
-pairs_rtmb(fit = mcmc, pars = 1:5, order = "divergent")
+# pairs_rtmb(fit = mcmc, pars = 1:5, order = "divergent")
 plot_marginals(fit = mcmc, pars = 1:16)
