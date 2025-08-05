@@ -10,28 +10,29 @@ library(TMBhelper)
 
 theme_set(theme_bw())
 
+# Load full model ----
+
+load("base.rda")
+obj_full <- obj
+names(obj_full$report())
+
 # Read catch data ----
 
-load("data/CRA2/catch_CRA2.rda")
-
-catch <- catch_CRA2 %>%
-  mutate(TotalCatch = Commercial + Recreational) %>%
+catch <- read_csv("data/CRA2/CRA2_catch_data_input.csv") %>%
+  mutate(TotalCatch = Commercial + Recreational + Illegal + Customary) %>%
   group_by(Year) %>%
   summarise(Catch = sum(TotalCatch, na.rm = TRUE)) %>%
   ungroup()
 
-ggplot(catch, aes(x = Year, y = Catch)) +
+ggplot(data = catch, aes(x = Year, y = Catch)) +
   geom_line(color = "steelblue", linewidth = 2) +
   geom_point(color = "black", size = 2) +
-  labs(x = "Year", y = "Catch") +
-  theme_minimal() +
-  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) 
+  scale_y_continuous(limits = c(0, NA), expand = c(0, 0.05)) +
+  labs(x = "Fishing year", y = "Catch")
 
 # Read in CPUE data ----
 
-load("data/CRA2/logbook_CRA2.rda")
-
-CPUE_logbook <- logbook_CRA2 %>%
+CPUE_logbook <- read_csv("data/CRA2/CRA2_LB_CPUE_legal_2025.csv") %>%
   separate(Year, into = c("Year", "Season"), sep = "_") %>%
   mutate(Year = as.integer(Year)) %>%
   group_by(Year) %>%
@@ -39,12 +40,11 @@ CPUE_logbook <- logbook_CRA2 %>%
   ungroup() %>%
   mutate(q = 3)
 
-ggplot(CPUE_logbook, aes(x = Year, y = CPUE)) +
+ggplot(data = CPUE_logbook, aes(x = Year, y = CPUE)) +
   geom_line(color = "red", linewidth = 2) +
   geom_point(color = "black", size = 2) +
-  labs(x = "Year", y = "Logbook CPUE") +
-  theme_minimal() +
-  scale_y_continuous(expand = c(0, 0), limits = c(0, NA)) 
+  scale_y_continuous(limits = c(0, NA), expand = c(0, 0.05)) +
+  labs(x = "Year", y = "Logbook CPUE")
 
 load("data/CRA2/fsu_CRA2.rda")
 
@@ -86,6 +86,7 @@ parameters <- list(
   log_K = log(1500), # Carrying capacity
   log_z = log(1), # With z=1, the PT model is the Shaeffer model
   log_q = log(rep(0.001, 3)), # catchability
+  log_cpue_pow = log(rep(1, 3)),
   log_cpue_pro = log(rep(1e-6, 3)), # process error for CPUE
   log_sigmap = log(0.1), # process error
   log_B = log(rep(1500, n_year - 1))
@@ -134,7 +135,7 @@ fun <- function(parameters, data) {
   REPORT(Bpred)
   
   cpue_obs <- OBS(cpue_obs)
-  cpue_pred <- q[cpue_q] * B[match(cpue_year, year)]
+  cpue_pred <- q[cpue_q] * B[match(cpue_year, year)]^exp(log_cpue_pow[cpue_q])
   cpue_sigma <- sqrt(cpue_sd^2 + exp(log_cpue_pro[cpue_q])^2)# / cpue_wt
   nll_cpue <- -1 * dlnorm(x = cpue_obs, meanlog = log(cpue_pred), sdlog = cpue_sigma, log = TRUE)
   REPORT(cpue_pred)
@@ -176,11 +177,15 @@ names(obj$env)
 
 # Plot biomass ----
 
-pred_B <- data.frame(Year = data$year, B = obj$report()$Bpred)
+names(obj_full$report())
 
-ggplot(pred_B, aes(x = Year, y = B)) +
-  geom_point(color = "blue", size = 3) +
-  geom_line(color = "blue", size = 1) + 
+pred_Bfull <- data.frame(Year = 1979:2024, B = obj_full$report()$biomass_adj_yr[,1] * 2.5, Model = "Full")
+pred_Bbdm <- data.frame(Year = data$year, B = obj$report()$Bpred, Model = "BDM")
+pred_B <- bind_rows(pred_Bfull, pred_Bbdm)
+
+ggplot(data = pred_B, aes(x = Year, y = B, color = Model)) +
+  geom_point() +
+  geom_line() + 
   scale_y_continuous(expand = c(0, 0), limits = c(0, 2500)) +
   labs(x = "Fishing year", y = "Biomass")
 
