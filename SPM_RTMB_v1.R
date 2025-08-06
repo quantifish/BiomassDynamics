@@ -218,7 +218,7 @@ library(adnuts)
 
 # mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", iter = 4000, warmup = 3000, chains = 4, cores = 4,
 #                           control = list(adapt_delta = 0.995), init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
-mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", chains = 4, cores = 4, init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
+mcmc <- sample_snuts(obj = obj, metric = "auto", chains = 4, cores = 4, init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
 
 pairs_rtmb(fit = mcmc, pars = 1:5, order = "slow")
 pairs_rtmb(fit = mcmc, pars = 1:5, order = "mismatch")
