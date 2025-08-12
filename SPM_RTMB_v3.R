@@ -199,15 +199,13 @@ exp(obj$par)
 
 # Plot Observed vs Predicted CPUE ----
 
-cpue_df <- data.frame(Year = CPUE$Year, Season = CPUE$Season, Observed = CPUE$Median, Predicted = obj$report()$cpue_pred, Index = CPUE$Index) %>% 
-  mutate(Index = factor(Index, levels = l_cpue)) 
+cpue_df <- CPUE %>% mutate(Index = factor(Index, levels = l_cpue), Predicted = obj$report()$cpue_pred) 
 
-ggplot(cpue_df, aes(x = Year)) +
-  geom_point(aes(y = Observed), color = "grey", size = 2) +
-  geom_line(aes(y = Predicted, group = interaction(Index, Season)), 
-            color = "red", linewidth = 1.2) +
+ggplot(cpue_df, aes(x = Year, y = Median)) +
+  geom_point(aes(color = "Observed"), size = 2) +
+  geom_line(aes(y = Predicted, group = interaction(Index, Season), color = "Predicted"), linewidth = 1.2) +
   facet_grid(Index ~ Season, scales = "free_y") +
-  labs(x = "Fishing year", y = "CPUE")
+  labs(x = "Fishing year", y = "CPUE", color = NULL)
 
 resid <- oneStepPredict(obj = obj, observation.name = "cpue_obs", method = "oneStepGeneric", trace = FALSE)$residual
 resid_df <- data.frame(Time = data$cpue_time, Season = CPUE$Season, Residual = resid, Index = CPUE$Index) %>% 
@@ -225,7 +223,7 @@ ggplot(resid_df, aes(x = Time, y = Residual)) +
 
 names(obj_full$report())
 
-pred_Bfull <- data.frame(Year = 1979:2024, Season = 1, B = obj_full$report()$biomass_adj_yr[,1] * 1, Model = "Full")
+pred_Bfull <- data.frame(Year = 1979:2024, Season = 1, B = obj_full$report()$biomass_adj_yr[,1] * 2.8, Model = "Full")
 pred_Bbdm <- data.frame(Year = catch$Year, Season = catch$Season, B = obj$report()$Bpred, Model = "BDM") %>%
   filter(Season == 1) %>%
   filter(Year >= 1979)
