@@ -14,15 +14,14 @@ theme_set(theme_bw())
 
 load("base.rda")  #CRA 2 base model
 obj_full <- obj
+data_full <- data
 names(obj_full$report())
 
 # Read catch data ----
 
 catch <- read_csv("data/CRA2/CRA2_catch_data_input.csv") %>%
+  # mutate(TotalCatch = Commercial) %>%
   mutate(TotalCatch = Commercial + Recreational + Illegal + Customary) %>%
-  # group_by(Year) %>%
-  # summarise(Catch = sum(TotalCatch, na.rm = TRUE)) %>%
-  # ungroup() %>%
   select(Year, Season, Catch = TotalCatch) %>%
   arrange(Year, Season) %>%
   mutate(Period = 1:n())
@@ -30,9 +29,19 @@ catch <- read_csv("data/CRA2/CRA2_catch_data_input.csv") %>%
 ggplot(data = catch, aes(x = Year, y = Catch)) +
   geom_line(color = "steelblue", linewidth = 2) +
   geom_point(color = "black", size = 2) +
-  scale_y_continuous(limits = c(0, NA), expand = c(0, 0.05)) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   facet_wrap(Season ~ .) +
   labs(x = "Fishing year", y = "Catch")
+
+# For fitting to decamod ----
+
+# NEED TO GET THE VULN BIO FROM DECAMOD BY SEASON - currently only AW, I need to change
+
+vbiomass <- data.frame(Year = data_full$first_year:(data_full$first_year + data_full$n_year - 1),
+                       Median = obj_full$report()$biomass_adj_yr[,1]) %>% 
+  mutate(Season = 1, Mean = Median, SD = 0.1, q = 7, Index = "Biomass", Year = as.character(Year))
+  # left_join(ys, by = join_by(Year, Season)) %>%
+  # select(Year, Season, Period, Median, logSD, q, Index)
 
 # Read in CPUE data ----
 
@@ -64,14 +73,15 @@ logbook <- read_csv("data/CRA2/CRA2_LB_CPUE_legal_2025.csv") %>%
 
 ys <- catch %>% mutate(Year = as.character(Year)) %>% select(Year, Season, Period)
 
-CPUE <- bind_rows(fsu, celr, logbook) %>%
+CPUE <- bind_rows(fsu, celr, logbook, vbiomass) %>%
   mutate(logSD = log(1 + SD / Mean)) %>%
   left_join(ys, by = join_by(Year, Season)) %>%
   select(Year, Season, Period, Median, logSD, q, Index)
+
 tail(CPUE)
 head(CPUE)
 
-l_cpue <- c("FSU",  "CELR",  "Logbook")
+l_cpue <- c("FSU", "CELR", "Logbook", "Biomass")
 
 # State-space Surplus Production model for rock lobster ----
 
@@ -88,13 +98,15 @@ data <- list(
   cpue_sd = CPUE$logSD
 )
 
+n_q <- length(unique(data$cpue_q))
+
 parameters <- list(
   log_r = log(0.35), # Growth rate 
   log_K = log(1500), # Carrying capacity
   log_z = log(1), # With z=1, the PT model is the Shaeffer model
-  log_q = log(rep(0.001, 6)), # catchability
+  log_q = log(rep(0.001, n_q)), # catchability
   log_cpue_pow = log(1),
-  log_cpue_pro = log(rep(1e-6, 6)), # process error for CPUE
+  log_cpue_pro = log(rep(1e-6, n_q)), # process error for CPUE
   log_sigmap = log(0.1), # process error
   log_B = log(rep(1500, n_time - 1))
 )
@@ -151,7 +163,7 @@ fun <- function(parameters, data) {
 map <- list(
   # log_z = factor(NA), 
   log_cpue_pow = factor(NA),
-  log_cpue_pro = factor(rep(NA, 6))
+  log_cpue_pro = factor(rep(NA, n_q))
 )
 
 obj <- MakeADFun(cmb(fun, data), parameters, random = "log_B", map = map)
@@ -183,6 +195,7 @@ check_estimability(obj = obj)
 sd <- sdreport(obj)
 pred_pars <- exp(opt$par)
 names(obj$env)
+exp(obj$par)
 
 # Plot Observed vs Predicted CPUE ----
 
@@ -212,7 +225,7 @@ ggplot(resid_df, aes(x = Time, y = Residual)) +
 
 names(obj_full$report())
 
-pred_Bfull <- data.frame(Year = 1979:2024, Season = 1, B = obj_full$report()$biomass_adj_yr[,1] * 2.5, Model = "Full")
+pred_Bfull <- data.frame(Year = 1979:2024, Season = 1, B = obj_full$report()$biomass_adj_yr[,1] * 1, Model = "Full")
 pred_Bbdm <- data.frame(Year = catch$Year, Season = catch$Season, B = obj$report()$Bpred, Model = "BDM") %>%
   filter(Season == 1) %>%
   filter(Year >= 1979)
@@ -221,7 +234,7 @@ pred_B <- bind_rows(pred_Bfull, pred_Bbdm)
 ggplot(data = pred_B, aes(x = Year, y = B, color = Model)) +
   geom_point() +
   geom_line() + 
-  scale_y_continuous(expand = c(0, 0), limits = c(0, 3500)) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   labs(x = "Fishing year", y = "Biomass")
 
 # MCMC ----
