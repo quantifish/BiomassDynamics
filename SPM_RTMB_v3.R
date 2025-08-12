@@ -70,10 +70,10 @@ CPUE <- bind_rows(fsu, celr, logbook) %>%
   select(Year, Season, Period, Median, logSD, q, Index)
 tail(CPUE)
 head(CPUE)
+
 l_cpue <- c("FSU",  "CELR",  "Logbook")
 
-
-# State-space Surplus Production model for rock lobster 
+# State-space Surplus Production model for rock lobster ----
 
 n_time <- length(catch$Period)
 
@@ -93,20 +93,24 @@ parameters <- list(
   log_K = log(1500), # Carrying capacity
   log_z = log(1), # With z=1, the PT model is the Shaeffer model
   log_q = log(rep(0.001, 6)), # catchability
-  log_cpue_pow = log(rep(1, 6)),
-  #log_cpue_pro = log(rep(1e-6, 3)), # process error for CPUE
+  log_cpue_pow = log(1),
+  log_cpue_pro = log(rep(1e-6, 6)), # process error for CPUE
   log_sigmap = log(0.1), # process error
   log_B = log(rep(1500, n_time - 1))
 )
 
 priors <- list()
-priors[["log_r"]] <- list(type = "normal", par1 = log(0.35), par2 = 1.5, index = which("log_r" == names(parameters)))
-priors[["log_K"]] <- list(type = "normal", par1 = log(1000), par2 = 5, index = which("log_K" == names(parameters)))
-priors[["log_z"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_z" == names(parameters)))
+priors[["log_r"]] <- list(type = "normal", par1 = log(0.35), par2 = 0.5, index = which("log_r" == names(parameters)))
+priors[["log_K"]] <- list(type = "normal", par1 = log(1000), par2 = 1, index = which("log_K" == names(parameters)))
+priors[["log_z"]] <- list(type = "normal", par1 = 0, par2 = 0.1, index = which("log_z" == names(parameters)))
 priors[["log_q"]] <- list(type = "normal", par1 = -5, par2 = 2, index = which("log_q" == names(parameters)))
-#priors[["log_cpue_pro"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_cpue_pro" == names(parameters)))
-priors[["log_sigmap"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_sigmap" == names(parameters)))
-priors[["log_cpue_pow"]] <- list(type = "normal", par1 = 0, par2 = 1.5, index = which("log_cpue_pow" == names(parameters)))
+priors[["log_cpue_pow"]] <- list(type = "normal", par1 = 0, par2 = 0.5, index = which("log_cpue_pow" == names(parameters)))
+priors[["log_cpue_pro"]] <- list(type = "normal", par1 = 0, par2 = 0.5, index = which("log_cpue_pro" == names(parameters)))
+priors[["log_sigmap"]] <- list(type = "normal", par1 = 0, par2 = 0.5, index = which("log_sigmap" == names(parameters)))
+
+hist(exp(rnorm(1e6, log(0.35), 0.5))) # r
+hist(exp(rnorm(1e6, log(1000), 1))) # K
+hist(exp(rnorm(1e6, 0, 0.1))) # z
 
 priors
 evaluate_priors(parameters, priors)
@@ -114,10 +118,9 @@ data$priors <- priors
 
 fun <- function(parameters, data) {
   getAll(parameters, data, warn = FALSE)
-  r <- exp(log_r) /2 # because it is by season ? 
+  r <- exp(log_r)
   K <- exp(log_K)
   z <- exp(log_z)
-  cpue_pow <- exp(log_cpue_pow)
   B <- c(K, exp(log_B))
   
   n_time <- length(data$catch_time)
@@ -133,14 +136,10 @@ fun <- function(parameters, data) {
   REPORT(Bpred)
   
   cpue_obs <- OBS(cpue_obs)
-  # cpue_pred <- exp(log_q)[cpue_q] * B[match(cpue_year, year)]^cpue_pro
+  cpue_pow <- exp(log_cpue_pow)
   cpue_pred <- exp(log_q)[cpue_q] * B[cpue_time]^cpue_pow
-  # cpue_pred <- exp(log_q)[cpue_q] * B[cpue_time]
-  # cpue_pro <- exp(log_cpue_pro)[cpue_q]
-  # cpue_sigma <- sqrt(cpue_sd^2 + exp(log_cpue_pro[cpue_q])^2)
-  cpue_sigma <- cpue_sd
-  #nll_cpue <- -dlnorm(x = cpue_obs, meanlog = log(cpue_pred), sdlog = cpue_sigma, log = TRUE)
-  nll_cpue <- -1 * dlnorm(x = cpue_obs, meanlog = log(cpue_pred), sdlog = cpue_sigma, log = TRUE)
+  cpue_sigma <- sqrt(cpue_sd^2 + exp(log_cpue_pro[cpue_q])^2)
+  nll_cpue <- -dlnorm(x = cpue_obs, meanlog = log(cpue_pred), sdlog = cpue_sigma, log = TRUE)
   REPORT(cpue_pred)
   
   nll <- nll_B + sum(nll_cpue) - evaluate_priors(parameters, priors)
@@ -149,9 +148,11 @@ fun <- function(parameters, data) {
 
 # Fit the model ----
 
-map <- list(log_z = factor(NA))
-# map <- list(log_z = factor(NA), log_cpue_pro = factor(c(NA, NA, NA)))
-# map <- list(log_cpue_pro = factor(c(NA, NA, NA)))
+map <- list(
+  # log_z = factor(NA), 
+  log_cpue_pow = factor(NA),
+  log_cpue_pro = factor(rep(NA, 6))
+)
 
 obj <- MakeADFun(cmb(fun, data), parameters, random = "log_B", map = map)
 
@@ -169,8 +170,8 @@ Lwr[grep("log_q", names(obj$par))] <- -25
 Upr[grep("log_q", names(obj$par))] <- 1
 Lwr[grep("log_sigmap", names(obj$par))] <- log(0)
 Upr[grep("log_sigmap", names(obj$par))] <- log(2)
-#Lwr[grep("log_cpue_pro", names(obj$par))] <- log(0)
-#Upr[grep("log_cpue_pro", names(obj$par))] <- log(2)
+Lwr[grep("log_cpue_pro", names(obj$par))] <- log(0)
+Upr[grep("log_cpue_pro", names(obj$par))] <- log(2)
 
 control <- list(eval.max = 100000, iter.max = 100000)
 opt <- nlminb(start = obj$par, objective = obj$fn, gradient = obj$gr, control = control, lower = Lwr, upper = Upr)
@@ -188,60 +189,57 @@ names(obj$env)
 cpue_df <- data.frame(Year = CPUE$Year, Season = CPUE$Season, Observed = CPUE$Median, Predicted = obj$report()$cpue_pred, Index = CPUE$Index) %>% 
   mutate(Index = factor(Index, levels = l_cpue)) 
 
-q <- ggplot(cpue_df, aes(x = Year)) +
+ggplot(cpue_df, aes(x = Year)) +
   geom_point(aes(y = Observed), color = "grey", size = 2) +
   geom_line(aes(y = Predicted, group = interaction(Index, Season)), 
             color = "red", linewidth = 1.2) +
   facet_grid(Index ~ Season, scales = "free_y") +
   labs(x = "Fishing year", y = "CPUE")
-q
 
 resid <- oneStepPredict(obj = obj, observation.name = "cpue_obs", method = "oneStepGeneric", trace = FALSE)$residual
 resid_df <- data.frame(Time = data$cpue_time, Season = CPUE$Season, Residual = resid, Index = CPUE$Index) %>% 
   mutate(Index = factor(Index, levels = l_cpue))
 
-p <- ggplot(resid_df, aes(x = Time, y = Residual)) +
+ggplot(resid_df, aes(x = Time, y = Residual)) +
   geom_hline(yintercept = 0, color = "#00BA38", linetype = "dashed", linewidth = 0.5) +
   geom_hline(yintercept = c(-2, 2), color = "#F8766D", linetype = "dashed", linewidth = 0.5) +
   geom_linerange(aes(ymin = 0, ymax = Residual), color = "#619CFF", linewidth = 0.8) +
   geom_point(color = "#619CFF", size = 2) +
-  facet_wrap(Index ~ Season, ncol =2) +
+  facet_wrap(Index ~ Season, ncol = 2) +
   labs(x = "Fishing year", y = "OSA residuals")
-p
 
 # Plot biomass ----
 
 names(obj_full$report())
 
-pred_Bfull <- data.frame(Year = 1979:2024, Season = 1, B = obj_full$report()$biomass_adj_yr[,1]*2.5, Model = "Full")
+pred_Bfull <- data.frame(Year = 1979:2024, Season = 1, B = obj_full$report()$biomass_adj_yr[,1] * 2.5, Model = "Full")
 pred_Bbdm <- data.frame(Year = catch$Year, Season = catch$Season, B = obj$report()$Bpred, Model = "BDM") %>%
   filter(Season == 1) %>%
   filter(Year >= 1979)
 pred_B <- bind_rows(pred_Bfull, pred_Bbdm) 
 
-# why are both biomasses in different scales? 
-
-pp <- ggplot(data = pred_B, aes(x = Year, y = B, color = Model)) +
+ggplot(data = pred_B, aes(x = Year, y = B, color = Model)) +
   geom_point() +
   geom_line() + 
   scale_y_continuous(expand = c(0, 0), limits = c(0, 3500)) +
   labs(x = "Fishing year", y = "Biomass")
-pp
+
 # MCMC ----
 
 library(adnuts)
 
-# mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", iter = 4000, warmup = 3000, chains = 4, cores = 4,
-#                           control = list(adapt_delta = 0.995), init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
-mcmc <- sample_snuts(obj = obj, metric = "auto", chains = 4, cores = 4, init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
+mcmc <- sample_sparse_tmb(obj = obj, metric = "auto", iter = 4000, warmup = 3000, chains = 4, cores = 4,
+                          control = list(adapt_delta = 0.995), init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
+# mcmc <- sample_snuts(obj = obj, metric = "auto", chains = 4, cores = 4, init = "last.par.best", globals = list(evaluate_priors = evaluate_priors))
 
+plot_mcmc_diagnostics(mcmc = mcmc)
 pairs_rtmb(fit = mcmc, pars = 1:5, order = "slow")
 pairs_rtmb(fit = mcmc, pars = 1:5, order = "mismatch")
 # pairs_rtmb(fit = mcmc, pars = 1:5, order = "divergent")
 plot_marginals(fit = mcmc, pars = 1:16)
 
 # B_post <- get_posterior(object=obj, posterior=mcmc, pars = "log_B", iters = NULL, option = 2, type = "df")
-posteriors <- extract_samples(mcmc, as.list=TRUE)
+posteriors <- extract_samples(mcmc, as.list = TRUE)
 
 # is there a function already build in decamod to do this? 
 # combine 4 chains
